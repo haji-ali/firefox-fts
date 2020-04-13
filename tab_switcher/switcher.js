@@ -1,19 +1,45 @@
+// TODO 1. killing current tab or restoring a tab should not break the window.
+// TODO 2. add margins?
+//
 
 let selectedString;
 let allTabsSorted;
 // Maps keywords to tabs.
 let allTabKeywords;
 let isSettingKeyword = false;
+let doSort = false;
+let maxDead = 10;
 
+var main_window;
 /**
  * Always reloads the browser tabs and stores them to `allTabsSorted`
  * in most-recently-used order.
  */
-async function reloadTabs(query) {
+async function reloadTabs(query, selectActive) {
 	const tabs = await getAllTabs();
-	allTabsSorted = await sortTabsMru(tabs);
-	allTabKeywords = await getAllTabKeywords();
-	updateVisibleTabs(query, true);
+	if (doSort){
+		allTabsSorted = await sortTabsMru(tabs);
+	}
+	else{
+		allTabsSorted = tabs;
+	}
+	allTabKeywords = {};//await getAllTabKeywords(); // Too slow
+
+	if (maxDead >= 0) {
+		// get recently closed, with limit or unlimited if maxDead is 0
+		let recentlyClosed = await browser.sessions.getRecentlyClosed(
+			maxDead > 0 ? { maxResults: maxDead } : {}
+		);
+
+		recentlyClosed = recentlyClosed
+			.filter(item => item.tab) // filter out recently closed windows
+			.map(item => item.tab) // move tab element to top
+		;
+
+		// add it to the end of allTabsSorted
+		allTabsSorted = allTabsSorted.concat(recentlyClosed)
+	}
+	updateVisibleTabs(query, true, selectActive);
 }
 
 async function getAllTabs() {
@@ -55,7 +81,7 @@ async function sortTabsMru(tabs) {
  * If `preserveSelectedTabIndex` is set to `true`, will preserve
  * the previously selected position, if any.
  */
-function updateVisibleTabs(query, preserveSelectedTabIndex) {
+function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) {
 	let tabs = allTabsSorted;
 	if (query) {
 		tabs = tabs.filter(tabsFilter(query));
@@ -66,11 +92,22 @@ function updateVisibleTabs(query, preserveSelectedTabIndex) {
 			tabs.splice(0, 0, keywordTab);
 		}
 	}
-
 	// Determine the index of a tab to highlight
+	const tabActive = allTabsSorted.findIndex(tab => tab.active);
+	const prevTabId = getSelectedTabId();
 	let tabIndex = 0;
-	const prevTabIndex = getSelectedTabIndex();
-	if (preserveSelectedTabIndex && prevTabIndex) {
+	if (selectActive && tabActive)
+		tabIndex = tabActive;
+	else if (preserveSelectedTabIndex && prevTabId) {
+		let prevTabIndex = getSelectedTabIndex();
+		let tab = allTabsSorted[prevTabIndex];
+		if (tab.id != prevTabId && tab.sessionId != prevTabId){
+			// Find index from id
+			const newIndex = allTabsSorted.
+				  findIndex(tab => (tab.id == prevTabId || tab.sessionId == prevTabId));
+			if (newIndex && newIndex >= 0)
+				prevTabIndex = newIndex;
+		}
 		const numVisibleTabs = tabs.length;
 		if (prevTabIndex < numVisibleTabs) {
 			tabIndex = prevTabIndex;
@@ -78,31 +115,35 @@ function updateVisibleTabs(query, preserveSelectedTabIndex) {
 			tabIndex = numVisibleTabs - 1;
 		}
 	}
-
 	// Update the body of the table with filtered tabs
 	$('#tabs_table tbody').empty().append(
 		tabs.map((tab, tabIndex) =>
-			$('<tr></tr>').append(
-				$('<td></td>').append(
-					tab.favIconUrl
-						? $('<img width="16" height="16">')
-							.attr('src',
-								!tab.incognito
-									? tab.favIconUrl
-									: '/icons/mask16.svg'
-							)
-						: null
-				),
-				$('<td></td>').text(tab.title),
-				$('<td></td>').text(tab.url),
-			)
-			.data('index', tabIndex)
-			.data('tabId', tab.id)
-			.on('click', () => setSelectedString(tabIndex))
-			.on('dblclick', e => activateTab())
-		)
+				 {
+					 const isDead = Object.prototype.hasOwnProperty.call(tab, "sessionId");
+					 const tabId = isDead ? tab.sessionId : tab.id;
+					 return $('<tr></tr>').append(
+						 $('<td></td>').append(
+							 tab.favIconUrl
+								 ? $('<img width="16" height="16">')
+								 .attr('src',
+									   !tab.incognito
+									   ? tab.favIconUrl
+									   : '/icons/mask16.svg'
+									  )
+								 : null
+						 ),
+						 $('<td></td>').text(tab.title).addClass("tabs_table__row_title"),
+						 $('<td></td>').text(tab.url),
+					 )
+						 .data('index', tabIndex)
+						 .data('tabId', tabId)
+						 .data('dead', isDead)
+						 .on('click', () => setSelectedString(tabIndex))
+						 .on('dblclick', e => activateTab())
+						 .addClass(isDead ? "dead" : "alive");
+				 }
+				)
 	);
-
 	// Highlight the selected tab
 	setSelectedString(tabIndex);
 }
@@ -131,58 +172,13 @@ async function setTabKeyword() {
 	const tabs = await browser.tabs.query({active: true, currentWindow: true});
 	let keyword = $('#search_input').val();
 	await browser.sessions.setTabValue(tabs[0].id, "keyword", keyword);
-	window.close();
+	closeSwitcher();
 }
 
-reloadTabs();
-
-$('#search_input')
-	.focus()
-	.on('input', event => {
-		if (isSettingKeyword) {
-			return;
-		}
-		if (event.target.value == "=") {
-			beginSetTabKeyword();
-		} else {
-			updateVisibleTabs(event.target.value, false);
-		}
-	});
-
-enableQuickSwitch();
-
-$(window).on('keydown', event => {
-	const key = event.originalEvent.key;
-
-	if ((key === 'ArrowDown') ||
-	    (event.ctrlKey && key === 'n'))
-	{
-		setSelectedString(getNextPageDownIndex(1));
-		event.preventDefault();
-	} else if ((key === 'ArrowUp') ||
-	           (event.ctrlKey && key === 'p'))
-	{
-		setSelectedString(getNextPageUpIndex(1));
-		event.preventDefault();
-	} else if (key === 'PageDown') {
-		setSelectedString(getNextPageDownIndex(13));
-		event.preventDefault();
-	} else if (key === 'PageUp') {
-		setSelectedString(getNextPageUpIndex(13));
-		event.preventDefault();
-	} else if (key === 'Escape') {
-		window.close();
-	} else if (key === 'Enter') {
-		if (isSettingKeyword) {
-			setTabKeyword();
-		} else {
-			activateTab();
-		}
-	} else if (event.ctrlKey && key === 'Delete') {
-		closeTab();
-		event.preventDefault();
-	}
-});
+function closeSwitcher(){
+	main_window.close();
+	main_window = "undefined";
+}
 
 
 /** 
@@ -244,7 +240,6 @@ function setSelectedString(index) {
 	newSelected.addClass('tabs_table__selected');
 
 	selectedString = newSelected;
-
 	scrollToSelection();
 }
 
@@ -252,18 +247,20 @@ function scrollToSelection() {
 	if (!selectedString) {
 		return;
 	}
-
 	const scrollPadding = 20;
-
 	const tableContainer = $('#tabs_table__container');
 	const stringOffset = selectedString[0].offsetTop;
 	const scrollMax = stringOffset - scrollPadding;
 	const scrollMin = stringOffset
-		+ selectedString.height() - tableContainer.height() + scrollPadding;
-
+		  + selectedString.height() - tableContainer.height() + scrollPadding;
 	if (scrollMax < scrollMin) {
 		// Resetting scroll since there is no enough space
 		tableContainer.scrollTop(0);
+		if (tableContainer.height() < selectedString.height()){
+			// Fixes a bug where the table is not yet populated for some reason
+			// and so scrolling fails
+			setTimeout(scrollToSelection, 0);
+		}
 		return;
 	}
 
@@ -316,28 +313,34 @@ async function activateTab() {
 	}
 
 	const tabId = getSelectedTabId();
-	const tab = await browser.tabs.get(tabId);
+	if (isSelectedTabDead()){
+		// restore tab
+		await browser.sessions.restore(tabId);
+		closeSwitcher();
+	}
+	{
+		const tab = await browser.tabs.get(tabId);
+		// Switch to the target tab
+		await browser.tabs.update(tabId, {active: true});
 
-	// Switch to the target tab
-	await browser.tabs.update(tabId, {active: true});
+		// Check if we should focus other browser window
+		const currentWin = await browser.windows.getCurrent();
+		if (currentWin.id !== tab.windowId) {
+			// Focus on the browser window containing the tab
+			await browser.windows.update(tab.windowId, {focused: true});
 
-	// Check if we should focus other browser window
-	const currentWin = await browser.windows.getCurrent();
-	if (currentWin.id !== tab.windowId) {
-		// Focus on the browser window containing the tab
-		await browser.windows.update(tab.windowId, {focused: true});
-
-		// Popup will close itself on window switch.
-		// And if we call window.close() here
-		// origin browser window will become foreground again.
-	} else {
-		// Close the tab switcher pop up
-		window.close();
+			// Popup will close itself on window switch.
+			// And if we call window.close() here
+			// origin browser window will become foreground again.
+		} else {
+			// Close the tab switcher pop up
+			closeSwitcher();
+		}
 	}
 }
 
 async function closeTab() {
-	if (!selectedString) {
+	if (!selectedString || isSelectedTabDead()) {
 		return;
 	}
 
@@ -360,3 +363,63 @@ async function closeTab() {
 function getSelectedTabId() {
 	return selectedString ? selectedString.data('tabId') : undefined;
 }
+
+function isSelectedTabDead() {
+	return selectedString ? selectedString.data('dead') : undefined;
+}
+
+async function main(){
+	main_window = window;
+	reloadTabs(null, true);
+
+	$('#search_input')
+		.focus()
+		.on('input', event => {
+			if (isSettingKeyword) {
+				return;
+			}
+			if (event.target.value == "=") {
+				beginSetTabKeyword();
+			} else {
+				updateVisibleTabs(event.target.value, false);
+			}
+		});
+}
+
+document.addEventListener("DOMContentLoaded", main);
+
+$(window).on('keydown', event => {
+	const key = event.originalEvent.key;
+
+	if ((key === 'ArrowDown') ||
+		(event.ctrlKey && key === 'n'))
+	{
+		setSelectedString(getNextPageDownIndex(1));
+		event.preventDefault();
+	} else if ((key === 'ArrowUp') ||
+			   (event.ctrlKey && key === 'p'))
+	{
+		setSelectedString(getNextPageUpIndex(1));
+		event.preventDefault();
+	} else if (key === 'PageDown') {
+		setSelectedString(getNextPageDownIndex(13));
+		event.preventDefault();
+	} else if (key === 'PageUp') {
+		setSelectedString(getNextPageUpIndex(13));
+		event.preventDefault();
+	} else if (key === 'Escape') {
+		closeSwitcher();
+	} else if (key === 'Enter') {
+		if (isSettingKeyword) {
+			setTabKeyword();
+		} else {
+			activateTab();
+		}
+	} else if (event.ctrlKey && key === 'Delete') {
+		closeTab();
+		event.preventDefault();
+	} else if (event.altKey && key === 'r') {
+		doSort = !doSort;
+		reloadTabs();
+	}
+});
