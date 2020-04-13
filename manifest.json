@@ -1,7 +1,7 @@
 {
 	"applications" : {
 		"gecko" : {
-			"id" : "tabswitcher@volinsky.net"
+			"id" : "abdo.haji.ali@gmail.com"
 		}
 	},
 
@@ -20,7 +20,7 @@
 	"commands" : {
 		"_execute_browser_action" : {
 			"suggested_key" : {
-				"default" : "Ctrl+Space",
+				"default" : "Ctrl+Alt+O",
 				"mac" : "MacCtrl+Space"
 			},
 			"description" : "Open \"Fast Tab Switcher\" popup"
