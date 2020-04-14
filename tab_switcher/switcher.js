@@ -1,8 +1,5 @@
-// TODO 1. killing current tab or restoring a tab should not break the window.
-// TODO 2. add margins?
-//
-
 let selectedString;
+
 let allTabsSorted;
 // Maps keywords to tabs.
 let allTabKeywords;
@@ -10,7 +7,7 @@ let isSettingKeyword = false;
 let doSort = false;
 let maxDead = 10;
 
-var main_window;
+let activeTabIndex = undefined;
 /**
  * Always reloads the browser tabs and stores them to `allTabsSorted`
  * in most-recently-used order.
@@ -39,6 +36,10 @@ async function reloadTabs(query, selectActive) {
 		// add it to the end of allTabsSorted
 		allTabsSorted = allTabsSorted.concat(recentlyClosed)
 	}
+
+	const currentWin = await browser.windows.getCurrent();
+	activeTabIndex = allTabsSorted.findIndex(tab => tab.active && tab.windowId == currentWin.id);
+
 	updateVisibleTabs(query, true, selectActive);
 }
 
@@ -81,7 +82,8 @@ async function sortTabsMru(tabs) {
  * If `preserveSelectedTabIndex` is set to `true`, will preserve
  * the previously selected position, if any.
  */
-function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) {
+async function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) {
+
 	let tabs = allTabsSorted;
 	if (query) {
 		tabs = tabs.filter(tabsFilter(query));
@@ -93,11 +95,10 @@ function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) {
 		}
 	}
 	// Determine the index of a tab to highlight
-	const tabActive = allTabsSorted.findIndex(tab => tab.active);
 	const prevTabId = getSelectedTabId();
 	let tabIndex = 0;
-	if (selectActive && tabActive)
-		tabIndex = tabActive;
+	if (selectActive && activeTabIndex)
+		tabIndex = activeTabIndex;
 	else if (preserveSelectedTabIndex && prevTabId) {
 		let prevTabIndex = getSelectedTabIndex();
 		let tab = allTabsSorted[prevTabIndex];
@@ -115,6 +116,7 @@ function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) {
 			tabIndex = numVisibleTabs - 1;
 		}
 	}
+
 	// Update the body of the table with filtered tabs
 	$('#tabs_table tbody').empty().append(
 		tabs.map((tab, tabIndex) =>
@@ -138,7 +140,8 @@ function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) {
 						 .data('index', tabIndex)
 						 .data('tabId', tabId)
 						 .data('dead', isDead)
-						 .on('click', () => setSelectedString(tabIndex))
+						 .on('click', () => {setSelectedString(tabIndex);
+											 $('#search_input').focus();})
 						 .on('dblclick', e => activateTab())
 						 .addClass(isDead ? "dead" : "alive");
 				 }
@@ -176,8 +179,7 @@ async function setTabKeyword() {
 }
 
 function closeSwitcher(){
-	main_window.close();
-	main_window = "undefined";
+	window.close();
 }
 
 
@@ -292,19 +294,12 @@ function getNextPageDownIndex(pageSize) {
 	if (currentSelectedIndex === lastElementIndex) {
 		return 0;
 	} else {
-	    return Math.min(currentSelectedIndex + pageSize, lastElementIndex)
+		return Math.min(currentSelectedIndex + pageSize, lastElementIndex)
 	}
 }
 
 function getTableSize() {
 	return $('#tabs_table tbody tr').length;
-}
-
-/** 
- * Returns the index of the currently selected tab, or `undefined` if none is selected.
- */
-function getSelectedTabIndex() {
-	return selectedString ? selectedString.data('index') : undefined;
 }
 
 async function activateTab() {
@@ -318,6 +313,7 @@ async function activateTab() {
 		await browser.sessions.restore(tabId);
 		closeSwitcher();
 	}
+
 	{
 		const tab = await browser.tabs.get(tabId);
 		// Switch to the target tab
@@ -340,9 +336,13 @@ async function activateTab() {
 }
 
 async function closeTab() {
-	if (!selectedString || isSelectedTabDead()) {
+	if (!selectedString || isSelectedTabDead() || isSelectedTabActive()) {
 		return;
 	}
+
+	const tabIndex = getSelectedTabIndex();
+	if (tabIndex == activeTabIndex)
+		return;
 
 	// Close the selected tab
 	const tabId = getSelectedTabId();
@@ -354,6 +354,14 @@ async function closeTab() {
 	
 	// Ensure the extension popup remains focused after potential tab switch
 	window.focus();
+}
+
+
+/**
+ * Returns the index of the currently selected tab, or `undefined` if none is selected.
+ */
+function getSelectedTabIndex() {
+	return selectedString ? selectedString.data('index') : undefined;
 }
 
 /** 
@@ -368,8 +376,13 @@ function isSelectedTabDead() {
 	return selectedString ? selectedString.data('dead') : undefined;
 }
 
+
+function isSelectedTabActive() {
+	return selectedString ? selectedString.data('active') : undefined;
+}
+
+
 async function main(){
-	main_window = window;
 	reloadTabs(null, true);
 
 	$('#search_input')
@@ -387,6 +400,9 @@ async function main(){
 }
 
 document.addEventListener("DOMContentLoaded", main);
+
+// Seems to fix bug when popup loses focus but stays open
+window.addEventListener("blur", closeSwitcher);
 
 $(window).on('keydown', event => {
 	const key = event.originalEvent.key;
