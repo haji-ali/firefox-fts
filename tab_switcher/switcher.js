@@ -1,13 +1,13 @@
 let selectedString;
-
 let allTabsSorted;
 // Maps keywords to tabs.
 let allTabKeywords;
 let isSettingKeyword = false;
 let doSort = false;
 let maxDead = 10;
-
 let activeTabIndex = undefined;
+let preventClosingCurrent = true;
+
 /**
  * Always reloads the browser tabs and stores them to `allTabsSorted`
  * in most-recently-used order.
@@ -341,7 +341,7 @@ async function closeTab() {
 	}
 
 	const tabIndex = getSelectedTabIndex();
-	if (tabIndex == activeTabIndex)
+	if (preventClosingCurrent && tabIndex == activeTabIndex)
 		return;
 
 	// Close the selected tab
