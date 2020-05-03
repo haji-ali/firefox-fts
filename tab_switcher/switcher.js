@@ -1,24 +1,78 @@
 let selectedString;
-let allTabsSorted;
+let allTabs;
+let maxDead = 10;
+
+let closingTabs = false;
+
+/**************** Port Message handling ****************/
+var portBk = browser.runtime.connect({name: 'FastTabSwitcher_Port'});
+const mapPort = new Map();
+let portMessageId = 0;
+portBk.onMessage.addListener(msg => {
+	const {id, data} = msg;
+	const resolve = mapPort.get(id);
+	mapPort.delete(id);
+	resolve(data);
+});
+
+function sendMessage(data) {
+	return new Promise(resolve => {
+		const id = ++portMessageId;
+		mapPort.set(id, resolve);
+		portBk.postMessage({id, data});
+	});
+}
+/**************** Port Message handling:END ****************/
+
+
+
+/**************** keyword logic ****************/
 // Maps keywords to tabs.
 let allTabKeywords;
 let isSettingKeyword = false;
-let doSort = false;
-let maxDead = 10;
-let activeTabIndex = undefined;
-let preventClosingCurrent = true;
+async function getAllTabKeywords() {
+	const keywords = {};
+	for (let tab of allTabs) {
+		let keyword = await browser.sessions.getTabValue(tab.id, "keyword");
+		if (keyword) {
+			keywords[keyword] = tab;
+		}
+	}
+	return keywords;
+}
+async function beginSetTabKeyword() {
+	isSettingKeyword = true;
+	const tabs = await browser.tabs.query({active: true, currentWindow: true});
+	const keyword = await browser.sessions.getTabValue(tabs[0].id, "keyword");
+	$("#tabs_table__container").hide();
+	$("#keyword_label").show();
+	$("#search_input").attr("aria-labelledby", "keyword_label")
+		// If there's an existing keyword, let the user see/edit it.
+		.val(keyword)
+		// Select it so the user can simply type over it to enter a new one.
+		.select();
+}
+
+async function setTabKeyword() {
+	const tabs = await browser.tabs.query({active: true, currentWindow: true});
+	let keyword = $('#search_input').val();
+	await browser.sessions.setTabValue(tabs[0].id, "keyword", keyword);
+	closeSwitcher();
+}
+/**************** keyword logic: END ****************/
+
 
 /**
- * Always reloads the browser tabs and stores them to `allTabsSorted`
+ * Always reloads the browser tabs and stores them to `allTabs`
  * in most-recently-used order.
  */
 async function reloadTabs(query, selectActive) {
-	const tabs = await getAllTabs();
-	if (doSort){
-		allTabsSorted = await sortTabsMru(tabs);
+	const tabs = await browser.tabs.query({windowType: 'normal'});
+	if (await sendMessage({type: "toggle_sort", toggle: false})) {
+		allTabs = await sortTabsMru(tabs);
 	}
 	else{
-		allTabsSorted = tabs;
+		allTabs = tabs;
 	}
 	allTabKeywords = {};//await getAllTabKeywords(); // Too slow
 
@@ -33,35 +87,18 @@ async function reloadTabs(query, selectActive) {
 			.map(item => item.tab) // move tab element to top
 		;
 
-		// add it to the end of allTabsSorted
-		allTabsSorted = allTabsSorted.concat(recentlyClosed)
+		// add it to the end of allTabs
+		allTabs = allTabs.concat(recentlyClosed)
 	}
 
 	const currentWin = await browser.windows.getCurrent();
-	activeTabIndex = allTabsSorted.findIndex(tab => tab.active && tab.windowId == currentWin.id);
-
 	updateVisibleTabs(query, true, selectActive);
 }
 
-async function getAllTabs() {
-	const allTabs = await browser.tabs.query({windowType: 'normal'});
-	return allTabs;
-}
 
-async function getAllTabKeywords() {
-	const keywords = {};
-	for (let tab of allTabsSorted) {
-		let keyword = await browser.sessions.getTabValue(tab.id, "keyword");
-		if (keyword) {
-			keywords[keyword] = tab;
-		}
-	}
-	return keywords;
-}
 
 async function sortTabsMru(tabs) {
-	const windowsLastAccess = await browser.runtime.sendMessage(
-		{type: 'getWindowsLastAccess'});
+	const windowsLastAccess = await sendMessage({type: 'getWindowsLastAccess'});
 
 	const sortKey = tab => {
 		if (tab.active) {
@@ -83,8 +120,7 @@ async function sortTabsMru(tabs) {
  * the previously selected position, if any.
  */
 async function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) {
-
-	let tabs = allTabsSorted;
+	let tabs = allTabs;
 	if (query) {
 		tabs = tabs.filter(tabsFilter(query));
 		// Check if this query matched a keyword for a tab.
@@ -97,18 +133,30 @@ async function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) 
 	// Determine the index of a tab to highlight
 	const prevTabId = getSelectedTabId();
 	let tabIndex = 0;
-	if (selectActive && activeTabIndex)
-		tabIndex = activeTabIndex;
+	if (selectActive){
+		const currentWin = await browser.windows.getCurrent();
+		tabIndex = tabs.findIndex(tab => tab.active && tab.windowId == currentWin.id);
+	}
 	else if (preserveSelectedTabIndex && prevTabId) {
+		// Check if the index still works
 		let prevTabIndex = getSelectedTabIndex();
-		let tab = allTabsSorted[prevTabIndex];
-		if (tab.id != prevTabId && tab.sessionId != prevTabId){
-			// Find index from id
-			const newIndex = allTabsSorted.
+		if (prevTabIndex < allTabs.length){
+			let tab = allTabs[prevTabIndex];
+			if (tab.id != prevTabId && tab.sessionId != prevTabId){
+				// Find index from id
+				prevTabIndex = undefined;
+			}
+		}
+		else
+			prevTabIndex = undefined;
+		
+		if (!prevTabIndex){
+			const newIndex = allTabs.
 				  findIndex(tab => (tab.id == prevTabId || tab.sessionId == prevTabId));
-			if (newIndex && newIndex >= 0)
+			if (newIndex >= 0)
 				prevTabIndex = newIndex;
 		}
+
 		const numVisibleTabs = tabs.length;
 		if (prevTabIndex < numVisibleTabs) {
 			tabIndex = prevTabIndex;
@@ -117,13 +165,15 @@ async function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) 
 		}
 	}
 
+	mapToDelete = await sendMessage({type: 'delete_tab_map'});
 	// Update the body of the table with filtered tabs
 	$('#tabs_table tbody').empty().append(
 		tabs.map((tab, tabIndex) =>
 				 {
 					 const isDead = Object.prototype.hasOwnProperty.call(tab, "sessionId");
 					 const tabId = isDead ? tab.sessionId : tab.id;
-					 return $('<tr></tr>').append(
+					 const to_delete = mapToDelete.has(tab.id);
+					 let row = $('<tr></tr>').append(
 						 $('<td></td>').append(
 							 tab.favIconUrl
 								 ? $('<img width="16" height="16">')
@@ -136,14 +186,16 @@ async function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) 
 						 ),
 						 $('<td></td>').text(tab.title).addClass("tabs_table__row_title"),
 						 $('<td></td>').text(tab.url),
-					 )
-						 .data('index', tabIndex)
+					 ).data('index', tabIndex)
 						 .data('tabId', tabId)
 						 .data('dead', isDead)
 						 .on('click', () => {setSelectedString(tabIndex);
 											 $('#search_input').focus();})
 						 .on('dblclick', e => activateTab())
 						 .addClass(isDead ? "dead" : "alive");
+					 if (to_delete)
+						 row.addClass("to_delete");
+					 return row;
 				 }
 				)
 	);
@@ -158,32 +210,12 @@ function tabsFilter(query) {
 			|| (tab.title || '').toLowerCase().indexOf(pattern) !== -1);
 }
 
-async function beginSetTabKeyword() {
-	isSettingKeyword = true;
-	const tabs = await browser.tabs.query({active: true, currentWindow: true});
-	const keyword = await browser.sessions.getTabValue(tabs[0].id, "keyword");
-	$("#tabs_table__container").hide();
-	$("#keyword_label").show();
-	$("#search_input").attr("aria-labelledby", "keyword_label")
-		// If there's an existing keyword, let the user see/edit it.
-		.val(keyword)
-		// Select it so the user can simply type over it to enter a new one.
-		.select();
-}
-
-async function setTabKeyword() {
-	const tabs = await browser.tabs.query({active: true, currentWindow: true});
-	let keyword = $('#search_input').val();
-	await browser.sessions.setTabValue(tabs[0].id, "keyword", keyword);
-	closeSwitcher();
-}
 
 function closeSwitcher(){
 	window.close();
 }
 
-
-/** 
+/**
  * After opening with Ctrl+Space press Space again while Ctrl is still
  * held to move selection down the list, and releasing makes the switch
 */
@@ -335,25 +367,31 @@ async function activateTab() {
 	}
 }
 
-async function closeTab() {
+function markTabToClose() {
 	if (!selectedString || isSelectedTabDead() || isSelectedTabActive()) {
 		return;
 	}
-
-	const tabIndex = getSelectedTabIndex();
-	if (preventClosingCurrent && tabIndex == activeTabIndex)
-		return;
+	var promiseToggleDelete = sendMessage({type: 'toggle_delete_tab',
+										   tabId: getSelectedTabId()});
+	promiseToggleDelete.then(
+		function(row){
+			return function(deleted) {
+				if (deleted)
+					row.addClass('to_delete');
+				else
+					row.removeClass('to_delete');
+				// expected output: "Success!"
+			}}(selectedString));
 
 	// Close the selected tab
-	const tabId = getSelectedTabId();
-	await browser.tabs.remove(tabId);
+	setSelectedString(getNextPageDownIndex(1));   // Select next
+}
 
-	// Reload tabs, using the current query
-	const query = $('#search_input').val();
-	await reloadTabs(query);
-	
-	// Ensure the extension popup remains focused after potential tab switch
-	window.focus();
+function unDeleteAllTabs(){
+	var promise = sendMessage({type: 'undelete_all'});
+	promise.then(function(){
+		updateVisibleTabs($('#search_input').val(), true);
+	});
 }
 
 
@@ -362,6 +400,16 @@ async function closeTab() {
  */
 function getSelectedTabIndex() {
 	return selectedString ? selectedString.data('index') : undefined;
+}
+
+function getSelectedTab(){
+	if (selectedString) {
+		const id = getSelectedTabId();
+		const selIndex = allTabs.findIndex(tab => (tab.id == id || tab.sessionId == id));
+		if (selIndex >= 0)
+			return allTabs[selIndex];
+	}
+	return undefined;
 }
 
 /** 
@@ -394,7 +442,7 @@ async function main(){
 			if (event.target.value == "=") {
 				beginSetTabKeyword();
 			} else {
-				updateVisibleTabs(event.target.value, false);
+				updateVisibleTabs(event.target.value, true);
 			}
 		});
 }
@@ -432,10 +480,23 @@ $(window).on('keydown', event => {
 			activateTab();
 		}
 	} else if (event.ctrlKey && key === 'Delete') {
-		closeTab();
+		markTabToClose();
 		event.preventDefault();
-	} else if (event.altKey && key === 'r') {
-		doSort = !doSort;
-		reloadTabs();
+	} 
+	else if (event.altKey && key === 'r') {
+		// TODO: Maybe do not reload tabs??
+		sendMessage({type: "toggle_sort", toggle: true}).then(
+			() => reloadTabs($('#search_input').val()));
+		event.preventDefault();
+	}
+	else if (event.altKey && key === 'x') {
+		sendMessage({type: "close_marked_tabs"}).then(
+			() => reloadTabs($('#search_input').val()));
+		event.preventDefault();
+	}
+	else if (event.altKey && key === 'u') {
+		unDeleteAllTabs();
+		event.preventDefault();
 	}
 });
+

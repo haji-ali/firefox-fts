@@ -89,3 +89,8 @@ body {
 .tabs_table__row_title {
 	padding-right:10px;
 }
+
+#tabs_table tr.to_delete {
+	color: red;
+	text-decoration: line-through;
+}
