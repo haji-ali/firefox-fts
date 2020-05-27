@@ -277,7 +277,7 @@ function setSelectedString(index) {
 	scrollToSelection();
 }
 
-function scrollToSelection() {
+function scrollToSelection(center) {
 	if (!selectedString) {
 		return;
 	}
@@ -288,7 +288,7 @@ function scrollToSelection() {
 	const scrollMin = stringOffset
 		  + selectedString.height() - tableContainer.height() + scrollPadding;
 	if (scrollMax < scrollMin) {
-		// Resetting scroll since there is no enough space
+		// Resetting scroll since there isn't enough space
 		tableContainer.scrollTop(0);
 		if (tableContainer.height() < selectedString.height()){
 			// Fixes a bug where the table is not yet populated for some reason
@@ -298,8 +298,8 @@ function scrollToSelection() {
 		return;
 	}
 
-	const scrollValue = Math.max(0, scrollMin,
-		Math.min(scrollMax, tableContainer.scrollTop()));
+	const scrollValue = center ? (scrollMax+scrollMin)/2 :
+		  Math.max(0, scrollMin, Math.min(scrollMax, tableContainer.scrollTop()));
 	tableContainer.scrollTop(scrollValue);
 }
 
@@ -484,7 +484,6 @@ $(window).on('keydown', event => {
 		event.preventDefault();
 	} 
 	else if (event.altKey && key === 'r') {
-		// TODO: Maybe do not reload tabs??
 		sendMessage({type: "toggle_sort", toggle: true}).then(
 			() => reloadTabs($('#search_input').val()));
 		event.preventDefault();
@@ -496,6 +495,10 @@ $(window).on('keydown', event => {
 	}
 	else if (event.altKey && key === 'u') {
 		unDeleteAllTabs();
+		event.preventDefault();
+	}
+	else if (event.ctrlKey && key === 'l') {
+		scrollToSelection(true);
 		event.preventDefault();
 	}
 });
