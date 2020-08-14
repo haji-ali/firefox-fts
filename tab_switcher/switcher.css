@@ -4,7 +4,6 @@ html, body {
 }
 
 
-
 body {
 	/* .dark; */
 	color: white;
@@ -88,6 +87,10 @@ body {
 
 .tabs_table__row_title {
 	padding-right:10px;
+}
+
+.tabs_table__row_host {
+	font-style: italic;
 }
 
 #tabs_table tr.to_delete {

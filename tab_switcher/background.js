@@ -62,11 +62,13 @@ async function processMessage(message) {
 		return windowsLastAccess;
 	}
 	else if (message.type == 'toggle_delete_tab'){
-		const tmp = !tabsToDelete.has(message.tabId);
-		if (tmp)
-			tabsToDelete.set(message.tabId, true);
-		else
-			tabsToDelete.delete(message.tabId);
+		const tmp = !tabsToDelete.has(message.tabId[0]);
+		for (var tabId of message.tabId){
+			if (tmp)
+				tabsToDelete.set(tabId, true);
+			else
+				tabsToDelete.delete(tabId);
+		}
 		return tmp;
 	}
 	else if (message.type == 'delete_tab_map'){
@@ -78,7 +80,14 @@ async function processMessage(message) {
 	else if (message.type == 'close_marked_tabs'){
 		// tabsToDelete.forEach((key, tabId) => console.log(tabId));
 		promises = Array.from(tabsToDelete.keys(),
-							  (tabId) => browser.tabs.remove(tabId));
+							  (tabId) => {
+								  try{
+									  browser.tabs.remove(tabId);
+								  }
+								  catch (error) {
+									  console.error(error);
+								  }
+							  });
 		await Promise.all(promises).then(() => tabsToDelete.clear());
 	}
 	else if (message.type == 'toggle_sort'){
@@ -88,3 +97,36 @@ async function processMessage(message) {
 	}
 	return true;  // Success
 }
+
+
+
+///////////////////////// Taken from tabs-tabs-tabs/background.js
+///////////////////////// Adds a badge with tab numbers
+function updateCount(tabId, isOnRemoved) {
+	browser.tabs.query({})
+		.then((tabs) => {
+			let length = tabs.length;
+
+			// onRemoved fires too early and the count is one too many.
+			// see https://bugzilla.mozilla.org/show_bug.cgi?id=1396758
+			if (isOnRemoved && tabId && tabs.map((t) => { return t.id; }).includes(tabId)) {
+				length--;
+			}
+
+			browser.browserAction.setBadgeText({text: length.toString()});
+			if (length > 2) {
+				browser.browserAction.setBadgeBackgroundColor({'color': 'green'});
+			} else {
+				browser.browserAction.setBadgeBackgroundColor({'color': 'red'});
+			}
+		});
+}
+
+
+browser.tabs.onRemoved.addListener(
+	(tabId) => { updateCount(tabId, true);
+			   });
+browser.tabs.onCreated.addListener(
+	(tabId) => { updateCount(tabId, false);
+			   });
+updateCount();

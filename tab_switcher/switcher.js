@@ -1,8 +1,10 @@
 let selectedString;
 let allTabs;
+let recentlyClosedTabs;
 let maxDead = 10;
-
 let closingTabs = false;
+let lastSelectedTabId = undefined;
+let current_view = "tabs";
 
 /**************** Port Message handling ****************/
 var portBk = browser.runtime.connect({name: 'FastTabSwitcher_Port'});
@@ -22,8 +24,11 @@ function sendMessage(data) {
 		portBk.postMessage({id, data});
 	});
 }
-/**************** Port Message handling:END ****************/
 
+function is_defined(x){
+	return typeof myVar !== 'undefined';
+}
+/**************** Port Message handling:END ****************/
 
 
 /**************** keyword logic ****************/
@@ -82,13 +87,10 @@ async function reloadTabs(query, selectActive) {
 			maxDead > 0 ? { maxResults: maxDead } : {}
 		);
 
-		recentlyClosed = recentlyClosed
+		recentlyClosedTabs = recentlyClosed
 			.filter(item => item.tab) // filter out recently closed windows
 			.map(item => item.tab) // move tab element to top
 		;
-
-		// add it to the end of allTabs
-		allTabs = allTabs.concat(recentlyClosed)
 	}
 
 	const currentWin = await browser.windows.getCurrent();
@@ -121,84 +123,162 @@ async function sortTabsMru(tabs) {
  */
 async function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) {
 	let tabs = allTabs;
+	let closed = recentlyClosedTabs;
 	if (query) {
 		tabs = tabs.filter(tabsFilter(query));
+		closed = closed.filter(tabsFilter(query));
 		// Check if this query matched a keyword for a tab.
 		const keywordTab = allTabKeywords[query];
 		if (keywordTab) {
 			// Put this at the top.
 			tabs.splice(0, 0, keywordTab);
+			closed.splice(0, 0, keywordTab);
 		}
 	}
-	// Determine the index of a tab to highlight
-	const prevTabId = getSelectedTabId();
-	let tabIndex = 0;
-	if (selectActive){
-		const currentWin = await browser.windows.getCurrent();
-		tabIndex = tabs.findIndex(tab => tab.active && tab.windowId == currentWin.id);
-	}
-	else if (preserveSelectedTabIndex && prevTabId) {
-		// Check if the index still works
-		let prevTabIndex = getSelectedTabIndex();
-		if (prevTabIndex < allTabs.length){
-			let tab = allTabs[prevTabIndex];
-			if (tab.id != prevTabId && tab.sessionId != prevTabId){
-				// Find index from id
-				prevTabIndex = undefined;
-			}
-		}
-		else
-			prevTabIndex = undefined;
-		
-		if (!prevTabIndex){
-			const newIndex = allTabs.
-				  findIndex(tab => (tab.id == prevTabId || tab.sessionId == prevTabId));
-			if (newIndex >= 0)
-				prevTabIndex = newIndex;
-		}
 
-		const numVisibleTabs = tabs.length;
-		if (prevTabIndex < numVisibleTabs) {
-			tabIndex = prevTabIndex;
-		} else {
-			tabIndex = numVisibleTabs - 1;
-		}
-	}
+	let prevTabId = preserveSelectedTabIndex?getSelectedTabId():undefined;
+	if (prevTabId !== undefined)
+		prevTabId = prevTabId[0];
+	let prevTabIndex = getSelectedTabIndex();
+	if (prevTabId === undefined && prevTabIndex === undefined)
+		selectActive = true;
 
 	mapToDelete = await sendMessage({type: 'delete_tab_map'});
-	// Update the body of the table with filtered tabs
-	$('#tabs_table tbody').empty().append(
-		tabs.map((tab, tabIndex) =>
-				 {
-					 const isDead = Object.prototype.hasOwnProperty.call(tab, "sessionId");
-					 const tabId = isDead ? tab.sessionId : tab.id;
-					 const to_delete = mapToDelete.has(tab.id);
-					 let row = $('<tr></tr>').append(
-						 $('<td></td>').append(
-							 tab.favIconUrl
-								 ? $('<img width="16" height="16">')
-								 .attr('src',
-									   !tab.incognito
-									   ? tab.favIconUrl
-									   : '/icons/mask16.svg'
-									  )
-								 : null
-						 ),
-						 $('<td></td>').text(tab.title).addClass("tabs_table__row_title"),
-						 $('<td></td>').text(tab.url),
-					 ).data('index', tabIndex)
-						 .data('tabId', tabId)
-						 .data('dead', isDead)
-						 .on('click', () => {setSelectedString(tabIndex);
-											 $('#search_input').focus();})
-						 .on('dblclick', e => activateTab())
-						 .addClass(isDead ? "dead" : "alive");
-					 if (to_delete)
-						 row.addClass("to_delete");
-					 return row;
-				 }
-				)
-	);
+	let startIndex = 0;
+	let createTabRow = (tab, tabIndex) => {
+		const isDead = Object.prototype.hasOwnProperty.call(tab, "sessionId");
+		const tabId = isDead ? tab.sessionId : tab.id;
+		const to_delete = mapToDelete.has(tab.id);
+		let row = $('<tr></tr>').append(
+			$('<td></td>').append(
+				tab.favIconUrl
+					? $('<img width="16" height="16">')
+					.attr('src',
+						  !tab.incognito
+						  ? tab.favIconUrl
+						  : '/icons/mask16.svg'
+						 )
+					: null
+			),
+			$('<td></td>').text(tab.title).addClass("tabs_table__row_title"),
+			$('<td></td>').text(tab.url),
+		).data('index', startIndex+tabIndex)
+			.data('tabId', [tabId])
+			.data('dead', isDead)
+			.on('click', () => {setSelectedString(tabIndex);
+								$('#search_input').focus();})
+			.on('dblclick', e => activateTab())
+			.addClass(isDead ? "dead" : "alive");
+		if (to_delete)
+			row.addClass("to_delete");
+		return row;
+	};
+
+	let doTabs = true;
+	if (tabs.length != 1 && current_view == "hosts"){
+		// Update the body of the table with filtered tabs
+		byHost = tabs.reduce(function(rv, tab) {
+			const isDead = Object.prototype.hasOwnProperty.call(tab, "sessionId");
+			if (!isDead){
+				let key = tab.url.match(/(?:.*:\/+(?:www.)?)?([A-Za-z0-9:\.\-]*)(?:.*)/)[1];
+				let tmp = rv.has(key) ? rv.get(key) : [];
+				tmp.push(tab);
+				rv.set(key, tmp);
+				//(rv[key] = (rv[key] || [])).push(tab);
+			}
+			else {
+				rv.set(tab.url, [tab]);
+			}
+			return rv;
+		}, new Map());
+
+		byHost = Array.from(byHost);
+		if (byHost.length > 1){
+			doTabs = false;
+			$('#tabs_table tbody').empty().append(
+				byHost.map((pair, index) => {
+					let host = pair[0];
+					let cur_tabs = pair[1];
+					let tab = cur_tabs[0];
+					if (cur_tabs.length == 1)
+						return createTabRow(tab, index);
+
+					const isDead = false; // cannot be dead
+					const tabId = cur_tabs.map(x => x.id);//isDead ? tab.sessionId : tab.id;
+					const to_delete = mapToDelete.has(tab.id);
+					let row = $('<tr></tr>').append(
+						$('<td></td>').append(
+							tab.favIconUrl
+								? $('<img width="16" height="16">')
+								.attr('src',
+									  !tab.incognito
+									  ? tab.favIconUrl
+									  : '/icons/mask16.svg'
+									 )
+								: null
+						),
+						$('<td colspan=2></td>').text(`${host} (${cur_tabs.length})`)
+							.addClass("tabs_table__row_title")
+							.addClass("tabs_table__row_host"),
+						//$('<td></td>').text(tab.url),
+					).data('index', index)
+						.data('tabId', tabId)
+						.data('host', host)
+						.data('dead', isDead)
+						.on('click', () => {setSelectedString(index);
+											$('#search_input').focus();})
+						.on('dblclick', e => activateTab())
+						.addClass(isDead ? "dead" : "alive");
+					if (to_delete)
+						row.addClass("to_delete");
+					return row;
+				})
+			);
+			startIndex = byHost.length;
+		}
+	}
+
+	if (doTabs)
+	{
+		// Update the body of the table with filtered tabs
+		$('#tabs_table tbody').empty().append(tabs.map(createTabRow));
+		startIndex = tabs.length;
+	}
+
+	// Start from different index
+	$('#tabs_table tbody').append(closed.map(createTabRow));
+
+	tabIndex = undefined;
+	// Determine the index of a tab to highlight
+	if (selectActive){
+		const currentWin = await browser.windows.getCurrent();
+		index = tabs.findIndex(tab => tab.active && tab.windowId == currentWin.id);
+		if (index >= 0)
+			prevTabId = tabs[index].id;
+	}
+
+	if (prevTabId !== undefined) {
+		// Find row which has this index
+		const newSelected = $('#tabs_table tbody tr').filter(
+			function() {
+				return $(this).data("tabId").includes(prevTabId);
+			}
+		);
+
+		if (newSelected)
+			tabIndex = newSelected.data("index"); // Might be unnecessary
+		else
+			tabIndex = 0;
+	}
+	
+	const numVisibleTabs = getTableSize();
+	if (tabIndex === undefined || tabIndex < 0){
+		tabIndex = prevTabIndex;
+		if (tabIndex === undefined || tabIndex < 0)
+			tabIndex = 0;
+	}
+	if (tabIndex >= numVisibleTabs)
+		tabIndex = numVisibleTabs - 1;
 	// Highlight the selected tab
 	setSelectedString(tabIndex);
 }
@@ -259,10 +339,7 @@ function enableQuickSwitch() {
 }
 
 function setSelectedString(index) {
-	const table = $('#tabs_table tbody');
-
-	const selector = String.raw`tr:nth-child(${index+1})`;
-	const newSelected = table.find(selector);
+	const newSelected = $('#tabs_table tbody').find(String.raw`tr:nth-child(${index+1})`);
 	if (!newSelected.length || index < 0) {
 		return;
 	}
@@ -339,7 +416,15 @@ async function activateTab() {
 		return;
 	}
 
-	const tabId = getSelectedTabId();
+	let tabId = getSelectedTabId();  /// Switch to first tab
+	const host = selectedString ? selectedString.data('host') : undefined;
+	if (host && tabId.length > 1){
+		$('#search_input').val(host);
+		updateVisibleTabs(event.target.value, true);
+		return;
+	}
+	tabId = tabId[0];
+
 	if (isSelectedTabDead()){
 		// restore tab
 		await browser.sessions.restore(tabId);
@@ -402,16 +487,6 @@ function getSelectedTabIndex() {
 	return selectedString ? selectedString.data('index') : undefined;
 }
 
-function getSelectedTab(){
-	if (selectedString) {
-		const id = getSelectedTabId();
-		const selIndex = allTabs.findIndex(tab => (tab.id == id || tab.sessionId == id));
-		if (selIndex >= 0)
-			return allTabs[selIndex];
-	}
-	return undefined;
-}
-
 /** 
  * Returns the browser identifier of the currently selected tab,
  * or `undefined` if none is selected.
@@ -429,6 +504,35 @@ function isSelectedTabActive() {
 	return selectedString ? selectedString.data('active') : undefined;
 }
 
+
+async function sortTabsByHost() {
+	const tabs = await browser.tabs.query({currentWindow: true});
+	// sort tabs, ignore pinned
+
+	var firstUnpinned = 0;
+	for (var tab of tabs) {
+		if (!tab.pinned)
+			break;
+		firstUnpinned++;
+	}
+
+	var indices = new Array(tabs.length);
+	for (var i = 0; i < tabs.length; ++i) indices[i] = i;
+	const sortKey = tab => {
+		return tab.url.match(/(?:.*:\/\/(?:www.)?)?(.*)/)[1];  // ignore protocol
+	};
+	const sorted = await indices.slice(firstUnpinned).sort((a,b) => sortKey(tabs[a]).localeCompare(sortKey(tabs[b])));
+
+	for (var i = 0; i < sorted.length; ++i) {
+		if (!tab.pinned && sorted[i] != i+firstUnpinned)
+			browser.tabs.move([tabs[sorted[i]].id], {index: i+firstUnpinned});
+	}
+
+	promises = Array.from(sorted,
+						  (j, i) =>
+						  browser.tabs.move([tabs[j].id], {index: i+firstUnpinned}));
+	await Promise.all(promises);
+}
 
 async function main(){
 	reloadTabs(null, true);
@@ -488,7 +592,18 @@ $(window).on('keydown', event => {
 			() => reloadTabs($('#search_input').val()));
 		event.preventDefault();
 	}
+	else if (event.altKey && key === 'h') {
+		sortTabsByHost().then(
+			() => reloadTabs($('#search_input').val()));
+		event.preventDefault();
+	}
+	else if (event.ctrlKey && key === 'h') {
+		current_view = current_view == "hosts" ? "tabs":"hosts";
+		reloadTabs($('#search_input').val());
+		event.preventDefault();
+	}
 	else if (event.altKey && key === 'x') {
+		// Find selected index and sent it to reloadTabs
 		sendMessage({type: "close_marked_tabs"}).then(
 			() => reloadTabs($('#search_input').val()));
 		event.preventDefault();
@@ -502,4 +617,3 @@ $(window).on('keydown', event => {
 		event.preventDefault();
 	}
 });
-
