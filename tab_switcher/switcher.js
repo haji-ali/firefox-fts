@@ -149,6 +149,7 @@ async function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) 
 		const isDead = Object.prototype.hasOwnProperty.call(tab, "sessionId");
 		const tabId = isDead ? tab.sessionId : tab.id;
 		const to_delete = mapToDelete.has(tab.id);
+		const host = tab.url.match(/(?:.*:\/+(?:www.)?)?([A-Za-z0-9:\.\-]*)(?:.*)/)[1];
 		let row = $('<tr></tr>').append(
 			$('<td></td>').append(
 				tab.favIconUrl
@@ -165,6 +166,7 @@ async function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) 
 		).data('index', startIndex+tabIndex)
 			.data('tabId', [tabId])
 			.data('dead', isDead)
+			.data('host', host)
 			.on('click', () => {setSelectedString(tabIndex);
 								$('#search_input').focus();})
 			.on('dblclick', e => activateTab())
@@ -472,6 +474,39 @@ function markTabToClose() {
 	setSelectedString(getNextPageDownIndex(1));   // Select next
 }
 
+function markHostToClose() {
+	if (!selectedString || isSelectedTabDead() || isSelectedTabActive()) {
+		return;
+	}
+
+	const newSelected = $('#tabs_table tbody tr').filter(
+			function() {
+				return $(this).data("host") == selectedString.data("host");
+			}
+		);
+
+	console.log(typeof newSelected);
+	newSelected.each(
+		function(){
+			let item = $( this );
+			var promiseToggleDelete = sendMessage({type: 'toggle_delete_tab',
+												   tabId: item.data("tabId")});
+			promiseToggleDelete.then(
+				function(row){
+					return function(deleted) {
+						if (deleted)
+							row.addClass('to_delete');
+						else
+							row.removeClass('to_delete');
+						// expected output: "Success!"
+					}}(item));
+		}
+	);
+	// Close the selected tab
+	setSelectedString(getNextPageDownIndex(1));   // Select next
+}
+
+
 function unDeleteAllTabs(){
 	var promise = sendMessage({type: 'undelete_all'});
 	promise.then(function(){
@@ -583,10 +618,21 @@ $(window).on('keydown', event => {
 		} else {
 			activateTab();
 		}
-	} else if (event.ctrlKey && key === 'Delete') {
-		markTabToClose();
+	}
+	else if (event.ctrlKey && key === 'Delete') {
+		if (event.shiftKey){
+			markHostToClose();
+		}
+		else{
+			markTabToClose();
+		}
 		event.preventDefault();
-	} 
+	}
+	else if (event.altKey && key === 'D') { // Emacs binding
+		console.log("Hello");
+		markHostToClose();
+		event.preventDefault();
+	}
 	else if (event.altKey && key === 'r') {
 		sendMessage({type: "toggle_sort", toggle: true}).then(
 			() => reloadTabs($('#search_input').val()));
