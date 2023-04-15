@@ -272,7 +272,7 @@ async function updateVisibleTabs(query, preserveSelectedTabIndex, selectActive) 
 		else
 			tabIndex = 0;
 	}
-	
+
 	const numVisibleTabs = getTableSize();
 	if (tabIndex === undefined || tabIndex < 0){
 		tabIndex = prevTabIndex;
@@ -382,8 +382,8 @@ function scrollToSelection(center) {
 	tableContainer.scrollTop(scrollValue);
 }
 
-/** 
- * Returns an index of the next tab in the list, if we go pageSize _up_ the list. 
+/**
+ * Returns an index of the next tab in the list, if we go pageSize _up_ the list.
  * If we are already at the top, then the next index is the index of the last (bottom) tab.
  */
 function getNextPageUpIndex(pageSize) {
@@ -395,8 +395,8 @@ function getNextPageUpIndex(pageSize) {
 	}
 }
 
-/** 
- * Returns an index of the next tab in the list, if we go pageSize _down_ the list. 
+/**
+ * Returns an index of the next tab in the list, if we go pageSize _down_ the list.
  * If we are already at the bottom, then the next index is the index of the first (top) tab.
  */
 function getNextPageDownIndex(pageSize) {
@@ -522,7 +522,7 @@ function getSelectedTabIndex() {
 	return selectedString ? selectedString.data('index') : undefined;
 }
 
-/** 
+/**
  * Returns the browser identifier of the currently selected tab,
  * or `undefined` if none is selected.
  */
@@ -591,75 +591,81 @@ document.addEventListener("DOMContentLoaded", main);
 // Seems to fix bug when popup loses focus but stays open
 window.addEventListener("blur", closeSwitcher);
 
-$(window).on('keydown', event => {
-	const key = event.originalEvent.key;
+$("#search_input").on('keydown', event => {
+  const key = event.originalEvent.key;
+  if (event.metaKey && key === 'h') {
+    sortTabsByHost().then(
+      () => reloadTabs($('#search_input').val()));
+    event.preventDefault();
+  }
+});
 
-	if ((key === 'ArrowDown') ||
-		(event.ctrlKey && key === 'n'))
-	{
-		setSelectedString(getNextPageDownIndex(1));
-		event.preventDefault();
-	} else if ((key === 'ArrowUp') ||
-			   (event.ctrlKey && key === 'p'))
-	{
-		setSelectedString(getNextPageUpIndex(1));
-		event.preventDefault();
-	} else if (key === 'PageDown') {
-		setSelectedString(getNextPageDownIndex(13));
-		event.preventDefault();
-	} else if (key === 'PageUp') {
-		setSelectedString(getNextPageUpIndex(13));
-		event.preventDefault();
-	} else if (key === 'Escape') {
-		closeSwitcher();
-	} else if (key === 'Enter') {
-		if (isSettingKeyword) {
-			setTabKeyword();
-		} else {
-			activateTab();
-		}
-	}
-	else if (event.ctrlKey && key === 'Delete') {
-		if (event.shiftKey){
-			markHostToClose();
-		}
-		else{
-			markTabToClose();
-		}
-		event.preventDefault();
-	}
-	else if (event.altKey && key === 'D') { // Emacs binding
-		console.log("Hello");
-		markHostToClose();
-		event.preventDefault();
-	}
-	else if (event.altKey && key === 'r') {
-		sendMessage({type: "toggle_sort", toggle: true}).then(
-			() => reloadTabs($('#search_input').val()));
-		event.preventDefault();
-	}
-	else if (event.altKey && key === 'h') {
-		sortTabsByHost().then(
-			() => reloadTabs($('#search_input').val()));
-		event.preventDefault();
-	}
-	else if (event.ctrlKey && key === 'h') {
-		current_view = current_view == "hosts" ? "tabs":"hosts";
-		reloadTabs($('#search_input').val());
-		event.preventDefault();
-	}
-	else if (event.altKey && key === 'x') {
-		// Find selected index and sent it to reloadTabs
-		sendMessage({type: "close_marked_tabs"}).then(
-			() => reloadTabs($('#search_input').val()));
-		event.preventDefault();
-	}
-	else if (event.altKey && key === 'u') {
-		unDeleteAllTabs();
-		event.preventDefault();
-	}
-	else if (event.ctrlKey && key === 'l') {
-		scrollToSelection(true);
-		event.preventDefault();
-	}
+$(window).on('keydown', event => {
+  const key = event.originalEvent.keyCode;
+
+  if ((key == 40)  // 'ArrowDown'
+      || (event.ctrlKey && key == 78))  // n
+  {
+    setSelectedString(getNextPageDownIndex(1));
+    event.preventDefault();
+  } else if ((key == 38) || // ArrowUp
+             (event.ctrlKey && key == 80)) // p
+  {
+    setSelectedString(getNextPageUpIndex(1));
+    event.preventDefault();
+  } else if ( (key == 34) // Pagedown
+           || (event.ctrlKey && key == 86)) {  // v
+    setSelectedString(getNextPageDownIndex(13));
+    event.preventDefault();
+  } else if ( (key == 33) // Pagedown
+           || (event.altKey && key == 86)) {  // v
+    setSelectedString(getNextPageUpIndex(13));
+    event.preventDefault();
+  } else if ((key == 27) ||
+             (event.ctrlKey && key == 71)) {  // Escape
+    closeSwitcher();
+  } else if (key == 13) {  // Enter
+    if (isSettingKeyword) {
+      setTabKeyword();
+    } else {
+      activateTab();
+    }
+  }
+  else if (event.ctrlKey && key == 68) {
+    markTabToClose();
+    event.preventDefault();
+  }
+  else if (key == 46 || (event.altKey && key == 68)) { // d
+    markHostToClose();
+    event.preventDefault();
+  }
+  else if (event.altKey && key == 82) { // r
+    sendMessage({type: "toggle_sort", toggle: true}).then(
+      () => reloadTabs($('#search_input').val()));
+    event.preventDefault();
+  }
+  else if (event.altKey && key == 72) {  // h
+    sortTabsByHost().then(
+      () => reloadTabs($('#search_input').val()));
+    event.preventDefault();
+  }
+  else if (event.ctrlKey && key == 72) {  // h
+    current_view = current_view == "hosts" ? "tabs":"hosts";
+    reloadTabs($('#search_input').val());
+    event.preventDefault();
+  }
+  else if (event.altKey && key == 88) { // x
+    // Find selected index and sent it to reloadTabs
+    sendMessage({type: "close_marked_tabs"}).then(
+      () => reloadTabs($('#search_input').val()));
+    event.preventDefault();
+  }
+  else if (event.altKey && key == 85) { // u
+    unDeleteAllTabs();
+    event.preventDefault();
+  }
+  else if (event.ctrlKey && key == 76) { // l
+    scrollToSelection(true);
+    event.preventDefault();
+  }
 });
