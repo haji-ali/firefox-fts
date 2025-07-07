@@ -112,7 +112,13 @@ async function sortTabsMru(tabs) {
 		}
 	};
 
-	const sorted = tabs.sort((a, b) => sortKey(b) - sortKey(a));
+  const sorted = tabs.sort((a, b) =>
+    {
+      if (tabs[a].groupId == tabs[b].groupId)
+        return sortKey(b) - sortKey(a)
+      return tabs[a].groupId - tabs[b].groupId;
+    }
+  );
 	return sorted;
 }
 
@@ -300,7 +306,7 @@ function closeSwitcher(){
 /**
  * After opening with Ctrl+Space press Space again while Ctrl is still
  * held to move selection down the list, and releasing makes the switch
-*/
+ */
 function enableQuickSwitch() {
 	const States = {
 		pending: 0,
@@ -545,27 +551,49 @@ async function sortTabsByHost() {
 	// sort tabs, ignore pinned
 
 	var firstUnpinned = 0;
-	for (var tab of tabs) {
-		if (!tab.pinned)
-			break;
+  const groupMap = new Map();
+  for (const tab of tabs) {
+    if (tab.pinned){
 		firstUnpinned++;
+      continue;
+    }
+    const groupId = tab.groupId;
+    if (!groupMap.has(groupId)) {
+      groupMap.set(groupId, []);
 	}
+    groupMap.get(groupId).push(tab);
+  }
+  let promises = [];
+  let currentIndex = firstUnpinned;
 
-	var indices = new Array(tabs.length);
-	for (var i = 0; i < tabs.length; ++i) indices[i] = i;
-	const sortKey = tab => {
-		return tab.url.match(/(?:.*:\/\/(?:www.)?)?(.*)/)[1];  // ignore protocol
-	};
-	const sorted = await indices.slice(firstUnpinned).sort((a,b) => sortKey(tabs[a]).localeCompare(sortKey(tabs[b])));
+  for (const [groupId, groupTabs] of groupMap.entries()) {
+    const sortedGroup = groupTabs.sort((a, b) => {
+      const hostA = new URL(a.url || "about:blank").hostname;
+      const hostB = new URL(b.url || "about:blank").hostname;
+      return hostA.localeCompare(hostB);
+    });
 
-	for (var i = 0; i < sorted.length; ++i) {
-		if (!tab.pinned && sorted[i] != i+firstUnpinned)
-			browser.tabs.move([tabs[sorted[i]].id], {index: i+firstUnpinned});
+    for (const tab of sortedGroup) {
+      const originalGroupId = tab.groupId;
+      promises.push(
+        browser.tabs
+               .move(tab.id, { index: currentIndex++ })
+               .then((movedTab) => {
+                 // Reapply group/container if needed
+                 if (originalGroupId > -1) {
+                   return browser.tabs.group({
+                     tabIds: tab.id,
+                     groupId: originalGroupId,
+                   });
+                 }
+                 else {
+                   return browser.tabs.ungroup([tab.id]);
+                 }
+               })
+               .catch(console.error)
+      );
+    }
 	}
-
-	promises = Array.from(sorted,
-						  (j, i) =>
-						  browser.tabs.move([tabs[j].id], {index: i+firstUnpinned}));
 	await Promise.all(promises);
 }
 
