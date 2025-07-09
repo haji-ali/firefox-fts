@@ -8,7 +8,7 @@ export FIREFOX_SECRETS=`pass firefox.com | tail -n +2`
 export AMO_JWT_ISSUER=$(echo "$FIREFOX_SECRETS" | awk -F': ' '/JWT_ISSUER/{print $2}')
 export AMO_JWT_SECRET=$(echo "$FIREFOX_SECRETS" | awk -F': ' '/JWT_SECRET/{print $2}')
 
-web-ext sign --api-key=$AMO_JWT_ISSUER --api-secret=$AMO_JWT_SECRET
+web-ext sign --api-key=$AMO_JWT_ISSUER --api-secret=$AMO_JWT_SECRET --channel=unlisted
 ```
 
 where the issuer and key are from `https://addons.mozilla.org/en-GB/developers/addon/api/key/`
